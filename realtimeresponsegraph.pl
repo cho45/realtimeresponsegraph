@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# usage: ssh proxy01 'tail -f /var/log/httpd/access_log' | realtimeresponsegraph.pl
+# usage: ssh proxy01 'tail -f /var/log/httpd/access_log' | grep --line-buffered -e "/ch/[0-9]*" | realtimeresponsegraph.pl
 use strict;
 use warnings;
 use OpenGL qw(:all);
