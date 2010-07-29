@@ -30,6 +30,7 @@ my $main = sub {
 
 	glClear(GL_COLOR_BUFFER_BIT);
 
+	glColor3d(1, 1, 1);
 	glBegin(GL_LINE_LOOP);
 	glVertex2d(1 / $w, 1 / $h);
 	glVertex2d(     1, 1 / $h);
@@ -87,7 +88,7 @@ my $main = sub {
 glutInit();
 glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH | GLUT_ALPHA);
 glutInitWindowSize($w, $h);
-glutCreateWindow( 'unko' );
+glutCreateWindow( 'realtimeresponsegraph' );
 # glEnable(GL_COLOR_MATERIAL);
 glutReshapeFunc(sub {
 	my ($aw, $ah) = @_;
