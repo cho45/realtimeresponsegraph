@@ -7,7 +7,7 @@ use List::Util qw(sum);
 use POSIX qw(floor);
 use Time::HiRes;
 
-my $w = 500;
+my $w = 700;
 my $h = 500;
 my $stat = {};
 
