@@ -50,6 +50,7 @@ my $main = sub {
 	}
 	glEnd();
 
+	my $sec1  = 0;
 	my $total = sum values %$stat;
 	if ($total) {
 		{
@@ -59,6 +60,7 @@ my $main = sub {
 			for (my $i = 0; $i <= 10000; $i += 100) {
 				$stack += $stat->{$i} || 0;
 				my $rate = $stack / $total;
+				$sec1 = $rate if $i == 1000;
 				glVertex2d($i / 10000, $rate);
 			}
 			glEnd();
@@ -77,11 +79,12 @@ my $main = sub {
 		}
 	}
 
+	glRasterPos2d(0.1,  1 / $h * 2);
+	glColor3d(1.0, 1.0, 1.0);
+	glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, ord($_)) for split //, sprintf('Total:%d / %.1f%% in 1 second', $total, $sec1 * 100);
+
 	glutSwapBuffers();
 
-#	glRasterPos2d(0, 0);
-#	glColor3d(1.0, 1.0, 1.0);
-#	glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, ord($_)) for split //, 'foobar';
 };
 
 
