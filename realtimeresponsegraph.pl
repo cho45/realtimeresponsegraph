@@ -16,7 +16,7 @@ my $main = sub {
 	eval {
 		my $rin = '';
 		vec($rin, fileno(STDIN),  1) = 1;
-		if (select($rin, undef, undef, 0)) {
+		while (select($rin, undef, undef, 0)) {
 			my $line = <>;
 			die unless defined $line;
 			my $microsec = [ split /\s+/, $line ]->[13] or die;
