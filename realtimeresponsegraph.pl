@@ -6,27 +6,42 @@ use OpenGL qw(:all);
 use List::Util qw(sum);
 use POSIX qw(floor);
 use Time::HiRes;
+use Getopt::Long;
 
-my $w = 700;
-my $h = 500;
+my $w      = 700;
+my $h      = 500;
+my $path   = '.';
+my $method = 'GET|POST';
+
+my $regexp = qr/^(.*?) (.*?) (.*?) \[(.*?)\] "(\S+?)(?: +(.*?) +(\S*?))?" (.*?) (.*?) "(.*?)" "(.*?)" "(.*?)" (.*?) /;
+my $fields = [qw/host l user time method path protocol status bytes referer ua bcookie response/];
 my $stat = {};
+
+GetOptions(
+	"width=i"  => \$w,
+	"height=i" => \$h,
+	"path=s"   => \$path,
+	"method=s"   => \$method,
+);
 
 my $main = sub {
 
-	eval {
-		my $rin = '';
-		vec($rin, fileno(STDIN),  1) = 1;
-		while (select($rin, undef, undef, 0)) {
-			my $line = <>;
-			die unless defined $line;
-			my $microsec = [ split /\s+/, $line ]->[13] or die;
-			my $millisec = $microsec / 1000;
+	my $rin = '';
+	vec($rin, fileno(STDIN),  1) = 1;
+	while (select($rin, undef, undef, 0)) {
+		my $line = <>;
+		defined $line or next;
+		my %data; @data{@$fields} = ($line =~ /$regexp/);
+		$data{path}   =~ /$path/   or next;
+		$data{method} =~ /$method/ or next;
+		print STDERR $line;
+		my $microsec = $data{response} or next;
+		my $millisec = $microsec / 1000;
 
-			my $key = floor($millisec / 100 + 0.5) * 100;
-			$key = 10000 if $key > 10000;
-			$stat->{$key}++;
-		}
-	};
+		my $key = floor($millisec / 100 + 0.5) * 100;
+		$key = 10000 if $key > 10000;
+		$stat->{$key}++;
+	}
 
 	glClear(GL_COLOR_BUFFER_BIT);
 
@@ -51,7 +66,7 @@ my $main = sub {
 	glEnd();
 
 	my $sec1  = 0;
-	my $total = sum values %$stat;
+	my $total = sum(values %$stat) || 0;
 	if ($total) {
 		{
 			glColor3d(0.1, 0.9, 0.3);
