@@ -1,12 +1,22 @@
 #!/usr/bin/env perl
-# usage: ssh proxy01 'tail -f /var/log/httpd/access_log' | grep --line-buffered -e "/ch/[0-9]*" | realtimeresponsegraph.pl
 use strict;
 use warnings;
 use OpenGL qw(:all);
 use List::Util qw(sum);
 use POSIX qw(floor);
-use Time::HiRes;
+use Time::HiRes qw(gettimeofday tv_interval);
 use Getopt::Long;
+use Pod::Usage;
+use constant COLORS => [ map { [ map { $_ ? hex($_) / 0xff : () } split /(..)/ ] } qw/
+	5c0800
+	a6a404
+	6da604
+	1a6801
+	01684e
+	203d9d
+	48209d
+	9d2096
+/];
 
 my $w         = 700;
 my $h         = 500;
@@ -16,23 +26,29 @@ my $format    = '';
 my $pagemaker = '.';
 my $cache     = '.';
 my $max       = 1000;
+my $group     = 'method';
 
-if (-e "$ENV{HOME}/.rrgrc") {
-	do "$ENV{HOME}/.rrgrc";
-}
+-e "$ENV{HOME}/.rrgrc" and do "$ENV{HOME}/.rrgrc";
 
 GetOptions(
 	"width=i"     => \$w,
 	"height=i"    => \$h,
+	"max=i"       => \$max,
 	"path=s"      => \$path,
 	"method=s"    => \$method,
 	"format=s"    => \$format,
+	"group=s"     => \$group,
+
 	"pagemaker=s" => \$pagemaker,
-	"max=i"       => \$max,
 	"cache=s"     => \$cache,
 );
 
-$format or die;
+sub usage {
+	pod2usage;
+	exit 1;
+}
+
+$format or usage;
 
 my $stat = {};
 my $detail_stat = {};
@@ -66,6 +82,7 @@ sub draw {
 
 
 my $main = sub {
+	my $start = [ gettimeofday ];
 	my $rin = '';
 	vec($rin, fileno(STDIN),  1) = 1;
 	while (select($rin, undef, undef, 0)) {
@@ -100,18 +117,20 @@ my $main = sub {
 		$stat->{$key}++;
 		$stat->{$keys[$index]}-- if defined($keys[$index]);
 
-		$detail_stat->{$data{cache}} ||= {};
-		$detail_keys->{$data{cache}} ||= ();
-		$detail_stat->{$data{cache}}->{$key}++;
+		$detail_stat->{$data{$group}} ||= {};
+		$detail_keys->{$data{$group}} ||= ();
+		$detail_stat->{$data{$group}}->{$key}++;
 
 		$keys[$index] = $key;
 		foreach (%$detail_keys){
 			$detail_stat->{$_}->{$detail_keys->{$_}[$index]}-- if defined($detail_keys->{$_}[$index]);
 			undef $detail_keys->{$_}[$index];
 		}
-		$detail_keys->{$data{cache}}[$index] = $key;
+		$detail_keys->{$data{$group}}[$index] = $key;
 		$index++;
 		$index = 0 if $index >= $max;
+
+		last if tv_interval($start) > 0.0416666666666667;
 	}
 
 	glClear(GL_COLOR_BUFFER_BIT);
@@ -136,37 +155,43 @@ my $main = sub {
 	}
 	glEnd();
 
-	my $sec1  = 0;
-	my $total = sum(values %$stat) || 0;
+	my $sec1   = 0;
+	my $total  = sum(values %$stat) || 0;
 	my $totals = {};
-	my $sec1s = {};
+	my $sec1s  = {};
 	if ($total) {
 		$sec1 = draw($total, $stat, [0.1, 0.9, 0.3], GL_LINE_STRIP);
 		draw($total, $stat, [0.1, 0.9, 0.3], GL_POINTS);
 	}
 
 	my $i = 0;
-	my @color = ([0.9, 0.9, 0.1], [0.9, 0.2, 0.4], [0.2, 0.5, 0.9]);
-	foreach (keys %$detail_stat){
+	my $colors = {};
+	foreach (keys %$detail_stat) {
+		my $color = COLORS->[ $i % @{COLORS()}];
+		$colors->{$_} = $color;
 		$totals->{$_} = sum(values %{$detail_stat->{$_}}) || 0;
 		$sec1s->{$_} ||= 0;
 		if ($totals->{$_}) {
-			$sec1s->{$_} = draw($totals->{$_}, $detail_stat->{$_}, $color[$i], GL_LINE_STRIP);
-			draw($totals->{$_}, $detail_stat->{$_}, $color[$i], GL_POINTS);
+			$sec1s->{$_} = draw($totals->{$_}, $detail_stat->{$_}, $color, GL_LINE_STRIP);
+			draw($totals->{$_}, $detail_stat->{$_}, $color, GL_POINTS);
 		}
 		$i++;
 	}
 
-	glRasterPos2d(0.1,  1 / $h * 2);
-	glColor3d(1.0, 1.0, 1.0);
+	glColor3d(1, 1, 1);
+	glRasterPos2d(0.1, 0.01 + 1 / $h * 2);
 
-	my @dat;
-	foreach (keys %$totals){
-		push @dat, sprintf('%s:%s', $_, $totals->{$_});
+	glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord($_)) for split //, sprintf('Total:%d | %.1f%% in 1 second ', $total, $sec1 * 100);
+
+	{
+		my $i = 0;
+		foreach (keys %$totals){
+			glColor3d(@{ $colors->{$_} });
+			glRasterPos2d(0.9,  0.01 + (1 / $h * 15) * $i++);
+			glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, ord($_)) for split //, sprintf('%s:%s ', $_, $totals->{$_});
+			glFlush();
+		}
 	}
-	my $s = join('/', @dat);
-
-	glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, ord($_)) for split //, sprintf('Total:%d / %.1f%% in 1 second (%s)', $total, $sec1 * 100, $s);
 
 	glutSwapBuffers();
 
@@ -260,3 +285,29 @@ sub regexp {
 	my ($self) = @_;
 	$self->{regexp};
 }
+
+__END__
+
+=head1 NAME
+
+realtimeresponsegraph.pl
+
+=head1 SYNOPSIS
+
+ realtimeresponsegraph --format <format>
+
+ ssh proxy01 'tail -f /var/log/httpd/access_log' | realtimeresponsegraph.pl --format rich_log --path '^/$'
+
+ Options:
+    --format      required.
+    --width       window width (default: 700)
+    --height      window height (default: 500)
+    --max         number of max requests
+    --path        gather only path matching this regexp
+    --method
+    --pagemaker
+    --cache
+
+
+ Read (do) ~/.rrgrc on startup.
+
