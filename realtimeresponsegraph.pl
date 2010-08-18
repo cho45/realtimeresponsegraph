@@ -9,6 +9,7 @@ use Time::HiRes qw(gettimeofday tv_interval);
 use Getopt::Long;
 use Pod::Usage;
 use constant COLORS => [ map { [ map { $_ ? hex($_) / 0xff : () } split /(..)/ ] } qw/
+	00dd1a
 	5c0800
 	a6a404
 	6da604
@@ -97,7 +98,7 @@ sub read_input {
 		my $data = $self->{parser}->parse($line);
 		for (qw/path method pagemaker cache isrobot/) {
 			my $reg = $self->{opts}->{$_};
-			defined $data->{$_} and ($data->{$_} =~ /$reg/ or next LINE);
+			defined $reg && defined $data->{$_} and ($data->{$_} =~ /$reg/ or next LINE);
 		}
 
 		($data->{cache}) = ($data->{cache} =~ /^([\w\-]+)/) if defined $data->{cache};
@@ -171,8 +172,8 @@ sub run_loop {
 		my $totals = {};
 		my $sec1s  = {};
 		if ($total) {
-			$sec1 = draw($total, $stats, [0.1, 0.9, 0.3], GL_LINE_STRIP);
-			draw($total, $stats, [0.1, 0.9, 0.3], GL_POINTS);
+			$sec1 = draw($total, $stats, [0.5, 0.5, 0.5], GL_LINE_STRIP);
+			draw($total, $stats, [0.5, 0.5, 0.5], GL_POINTS);
 		}
 
 		my $i = 0;
