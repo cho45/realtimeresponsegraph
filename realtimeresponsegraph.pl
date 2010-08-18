@@ -70,6 +70,10 @@ sub parse_options {
 		"pagemaker=s" => \$self->{opts}->{pagemaker},
 		"cache=s"     => \$self->{opts}->{cache},
 	);
+	if ($self->{opts}->{group} =~ /^sub\s*\{/) {
+		$self->{opts}->{group} = eval($self->{opts}->{group});
+		die $@ if ($@);
+	}
 	$self;
 }
 
@@ -102,7 +106,7 @@ sub read_input {
 		}
 
 		($data->{cache}) = ($data->{cache} =~ /^([\w\-]+)/) if defined $data->{cache};
-		# print STDERR $line;
+		print STDERR $line;
 
 		my $microsec = $data->{D} || $data->{taken} or next;
 		my $millisec = $microsec / 1000;
@@ -114,16 +118,18 @@ sub read_input {
 		$stats->{$key}++;
 		$stats->{$keys->[$index]}-- if defined $keys->[$index];
 
-		my $group = $self->{opts}->{group};
-		$detail_stats->{$data->{$group}} ||= {};
-		$detail_stats->{$data->{$group}}->{$key}++;
+		my $group_by = $self->{opts}->{group};
+		my $group = ref($group_by) ? $group_by->(local $_ = $data) : $data->{$group_by};
+
+		$detail_stats->{$group} ||= {};
+		$detail_stats->{$group}->{$key}++;
 
 		$keys->[$index] = $key;
 		foreach (%$detail_keys){
 			$detail_stats->{$_}->{$detail_keys->{$_}[$index]}-- if defined $detail_keys->{$_}[$index];
 			undef $detail_keys->{$_}[$index];
 		}
-		$detail_keys->{$data->{$group}}[$index] = $key;
+		$detail_keys->{$group}[$index] = $key;
 		$index++;
 		$index = 0 if $index >= $self->{opts}->{max};
 		$self->{index} = $index;
