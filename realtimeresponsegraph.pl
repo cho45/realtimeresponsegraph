@@ -12,9 +12,12 @@ my $w      = 700;
 my $h      = 500;
 my $path   = '.';
 my $method = 'GET|POST';
+my $format = 'combined';
 
-my $regexp = qr/^(.*?) (.*?) (.*?) \[(.*?)\] "(\S+?)(?: +(.*?) +(\S*?))?" (.*?) (.*?) "(.*?)" "(.*?)" "(.*?)" (.*?) /;
-my $fields = [qw/host l user time method path protocol status bytes referer ua bcookie response/];
+if (-e "$ENV{HOME}/.rrgrc") {
+	do "$ENV{HOME}/.rrgrc";
+}
+
 my $stat = {};
 
 GetOptions(
@@ -22,8 +25,10 @@ GetOptions(
 	"height=i" => \$h,
 	"path=s"   => \$path,
 	"method=s"   => \$method,
+	"format=s"   => \$format,
 );
 
+my $parser = LogFormat->new($format);
 my $main = sub {
 
 	my $rin = '';
@@ -31,11 +36,11 @@ my $main = sub {
 	while (select($rin, undef, undef, 0)) {
 		my $line = <>;
 		defined $line or next;
-		my %data; @data{@$fields} = ($line =~ /$regexp/);
-		$data{path}   =~ /$path/   or next;
-		$data{method} =~ /$method/ or next;
+		my $data = $parser->parse($line);
+		$data->{path}   !~ /$path/   or next;
+		$data->{method} =~ /$method/ or next;
 		print STDERR $line;
-		my $microsec = $data{response} or next;
+		my $microsec = $data->{D} or next;
 		my $millisec = $microsec / 1000;
 
 		my $key = floor($millisec / 100 + 0.5) * 100;
@@ -123,3 +128,70 @@ glutReshapeFunc(sub {
 glutDisplayFunc($main);
 glutIdleFunc($main);
 glutMainLoop();
+
+package LogFormat;
+use strict;
+use warnings;
+use base qw(Class::Data::Inheritable);
+
+my $regexp;
+
+INIT {
+	$regexp = {
+		't' => qr/\[([^\]]+?)\]/,
+		'r' => qr/(.+?)/,
+	};
+
+	__PACKAGE__->mk_classdata(logformats => {});
+
+	LogFormat->define_logformats(q[
+		LogFormat "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"" combined
+		LogFormat "%h %l %u %t \"%r\" %>s %b" common
+	]);
+};
+
+sub define_logformats {
+	my ($class, $format) = @_;
+	for my $line (split /\n/, $format) {
+		my ($format, $name) = ($line =~ /^\s*LogFormat\s+"((?:\\\\|\\\"|[^\"])+)"\s+(\S+)\s*$/) or next;
+		my $fields = [];
+		$format =~ s{\\"}{"}g;
+		$format =~ s{%[<>\d,]*(\w|\{[^\}]+\}\w)}{
+			my $type = $1;
+			push @$fields, $type;
+			$regexp->{$type} || ($type =~ /\{/ ? qr/(.+?)/ : qr/(\S*)/);
+		}eg;
+		$format =~ s{%%}{%}g;
+		$class->logformats->{$name} = {
+			fields => $fields,
+			regexp => qr/^$format$/,
+		};
+	}
+	$class->logformats;
+}
+
+sub new {
+	my ($class, $name) = @_;
+	my $format = $class->logformats->{$name};
+	bless {
+		name   => $name,
+		regexp => $format->{regexp},
+		fields => $format->{fields},
+	}, $class;
+}
+
+sub parse {
+	my ($self, $line) = @_;
+	my $fields = $self->{fields};
+	my $regexp = $self->{regexp};
+	my %data; @data{@$fields} = ($line =~ $regexp);
+	if (defined $data{r}) {
+		@data{qw/method path protocol/} = split / /, $data{r};
+	}
+	\%data
+}
+
+sub regexp {
+	my ($self) = @_;
+	$self->{regexp};
+}
