@@ -1,4 +1,5 @@
 #!/usr/bin/env perl
+package RealtimeResponseGraph;
 use strict;
 use warnings;
 use OpenGL qw(:all);
@@ -18,52 +19,219 @@ use constant COLORS => [ map { [ map { $_ ? hex($_) / 0xff : () } split /(..)/ ]
 	9d2096
 /];
 
-my $w         = 700;
-my $h         = 500;
-my $path      = '.';
-my $method    = 'GET|POST';
-my $format    = '';
-my $pagemaker = '.';
-my $cache     = '.';
-my $max       = 1000;
-my $group     = 'method';
+sub run {
+	my ($class) = @_;
+	my $self = $class->new;
+	$self->load_rc;
+	$self->parse_options;
+	$self->run_loop;
+}
 
--e "$ENV{HOME}/.rrgrc" and do "$ENV{HOME}/.rrgrc";
-
-GetOptions(
-	"width=i"     => \$w,
-	"height=i"    => \$h,
-	"max=i"       => \$max,
-	"path=s"      => \$path,
-	"method=s"    => \$method,
-	"format=s"    => \$format,
-	"group=s"     => \$group,
-
-	"pagemaker=s" => \$pagemaker,
-	"cache=s"     => \$cache,
-);
-
-sub usage {
+sub help {
 	pod2usage;
 	exit 1;
 }
 
-$format or usage;
+sub new {
+	my ($class, %opts) = @_;
+	bless {
+		parser       => undef,
+		stats        => {},
+		detail_stats => {},
+		detail_keys  => {},
+		keys         => [],
+		index        => 0,
+		opts => {
+			width     => 700,
+			height    => 500,
+			path      => undef,
+			method    => undef,
+			format    => '',
+			max       => 1000,
+			group     => 'method',
+			isrobot   => '-',
+		},
+		%opts
+	}, $class;
+}
 
-my $stat = {};
-my $detail_stat = {};
-my $detail_keys = {};
+sub parse_options {
+	my ($self) = @_;
+	GetOptions(
+		"width=i"     => \$self->{opts}->{width},
+		"height=i"    => \$self->{opts}->{height},
+		"max=i"       => \$self->{opts}->{max},
+		"path=s"      => \$self->{opts}->{path},
+		"method=s"    => \$self->{opts}->{method},
+		"format=s"    => \$self->{opts}->{format},
+		"group=s"     => \$self->{opts}->{group},
 
-my $index = 0;
-my @keys;
+		"pagemaker=s" => \$self->{opts}->{pagemaker},
+		"cache=s"     => \$self->{opts}->{cache},
+	);
+	$self;
+}
 
-my $parser = LogFormat->new($format);
+sub load_rc {
+	my ($self) = @_;
+	local $_ = $self;
+	-e "$ENV{HOME}/.rrgrc" and do "$ENV{HOME}/.rrgrc";
+	if ($@) {
+		die "Couldn't load ~/.rrgc: $@";
+	}
+}
+
+sub read_input {
+	my ($self) = @_;
+	my $stats        = $self->{stats};
+	my $detail_stats = $self->{detail_stats};
+	my $detail_keys  = $self->{detail_keys};
+	my $keys         = $self->{keys};
+
+	my $start = [ gettimeofday ];
+	my $rin = '';
+	vec($rin, fileno(STDIN),  1) = 1;
+	LINE: while (select($rin, undef, undef, 0)) {
+		my $line = <>;
+		defined $line or next;
+		my $data = $self->{parser}->parse($line);
+		for (qw/path method pagemaker cache isrobot/) {
+			my $reg = $self->{opts}->{$_};
+			defined $data->{$_} and ($data->{$_} =~ /$reg/ or next LINE);
+		}
+
+		($data->{cache}) = ($data->{cache} =~ /^([\w\-]+)/) if defined $data->{cache};
+		# print STDERR $line;
+
+		my $microsec = $data->{D} || $data->{taken} or next;
+		my $millisec = $microsec / 1000;
+
+		my $key = floor($millisec / 100 + 0.5) * 100;
+		$key = 10000 if $key > 10000;
+
+		my $index = $self->{index};
+		$stats->{$key}++;
+		$stats->{$keys->[$index]}-- if defined $keys->[$index];
+
+		my $group = $self->{opts}->{group};
+		$detail_stats->{$data->{$group}} ||= {};
+		$detail_stats->{$data->{$group}}->{$key}++;
+
+		$keys->[$index] = $key;
+		foreach (%$detail_keys){
+			$detail_stats->{$_}->{$detail_keys->{$_}[$index]}-- if defined $detail_keys->{$_}[$index];
+			undef $detail_keys->{$_}[$index];
+		}
+		$detail_keys->{$data->{$group}}[$index] = $key;
+		$index++;
+		$index = 0 if $index >= $self->{opts}->{max};
+		$self->{index} = $index;
+
+		last if tv_interval($start) > 0.0416666666666667;
+	}
+}
+
+sub run_loop {
+	my ($self) = @_;
+	$self->{opts}->{format} or $self->help;
+	$self->{parser} = ($self->{opts}->{format} eq 'tsv') ? Format::TSV->new:
+	                                                       Format::Apache::LogFormat->new($self->{opts}->{format});
+
+	my ($w, $h) = ($self->{opts}->{width}, $self->{opts}->{height});
+	my $main = sub {
+		$self->read_input;
+
+		glClear(GL_COLOR_BUFFER_BIT);
+
+		glColor3d(1, 1, 1);
+		glBegin(GL_LINE_LOOP);
+		glVertex2d(1 / $w, 1 / $h);
+		glVertex2d(     1, 1 / $h);
+		glVertex2d(     1,      1);
+		glVertex2d(1 / $w,      1);
+		glEnd();
+
+		glColor3d(0.1, 0.1, 0.1);
+		glBegin(GL_LINES);
+		for (my $i = 0; $i < 10; $i++) {
+			glVertex2d($i * 0.1, 0);
+			glVertex2d($i * 0.1, 1);
+		}
+		for (my $i = 0; $i < 10; $i++) {
+			glVertex2d(0, $i * 0.1);
+			glVertex2d(1, $i * 0.1);
+		}
+		glEnd();
+
+		my $stats = $self->{stats};
+		my $detail_stats = $self->{detail_stats};
+
+		my $sec1   = 0;
+		my $total  = sum(values %$stats) || 0;
+		my $totals = {};
+		my $sec1s  = {};
+		if ($total) {
+			$sec1 = draw($total, $stats, [0.1, 0.9, 0.3], GL_LINE_STRIP);
+			draw($total, $stats, [0.1, 0.9, 0.3], GL_POINTS);
+		}
+
+		my $i = 0;
+		my $colors = {};
+		foreach (keys %$detail_stats) {
+			my $color = COLORS->[ $i % @{COLORS()}];
+			$colors->{$_} = $color;
+			$totals->{$_} = sum(values %{$detail_stats->{$_}}) || 0;
+			$sec1s->{$_} ||= 0;
+			if ($totals->{$_}) {
+				$sec1s->{$_} = draw($totals->{$_}, $detail_stats->{$_}, $color, GL_LINE_STRIP);
+				draw($totals->{$_}, $detail_stats->{$_}, $color, GL_POINTS);
+			}
+			$i++;
+		}
+
+		glColor3d(1, 1, 1);
+		glRasterPos2d(0.1, 0.01 + 1 / $h * 2);
+
+		glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord($_)) for split //, sprintf('Total:%d | %.1f%% in 1 second ', $total, $sec1 * 100);
+
+		{
+			my $i = 0;
+			foreach (keys %$totals){
+				glColor3d(@{ $colors->{$_} });
+				glRasterPos2d(0.9,  0.01 + (1 / $h * 15) * $i++);
+				glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, ord($_)) for split //, sprintf('%s:%s ', $_, $totals->{$_});
+				glFlush();
+			}
+		}
+
+		glutSwapBuffers();
+
+	};
+
+
+	glutInit();
+	glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH | GLUT_ALPHA);
+	glutInitWindowSize($w, $h);
+	glutCreateWindow( 'realtimeresponsegraph' );
+	glutReshapeFunc(sub {
+			my ($aw, $ah) = @_;
+
+			glViewport(0, 0, $aw, $ah);
+			glLoadIdentity();
+			glOrtho(
+				-$aw / $w + 1, $aw / $w,
+				-$ah / $h + 1, $ah / $h,
+				-1.0, 1.0
+			);
+			# glTranslated(-1, -1, 0);
+		});
+	glutDisplayFunc($main);
+	glutIdleFunc($main);
+	glutMainLoop();
+}
 
 sub draw {
-	my $total = shift;
-	my $dat = shift;
-	my $color = shift;
-	my $type = shift;
+	my ($total, $dat, $color, $type) = @_;
 
 	my $sec1 = 0;
 	glColor3d(@$color);
@@ -77,152 +245,38 @@ sub draw {
 		glVertex2d($i / 10000, $rate);
 	}
 	glEnd();
-	return $sec1;
+
+	$sec1;
 }
 
+__PACKAGE__->run;
 
-my $main = sub {
-	my $start = [ gettimeofday ];
-	my $rin = '';
-	vec($rin, fileno(STDIN),  1) = 1;
-	while (select($rin, undef, undef, 0)) {
-		my $line = <>;
-		defined $line or next;
-		my %data;
-		if ($format eq 'tsv') {
-			foreach my $field (split(/\t/, $line)){
-				my ($key, $value) = split(/:/, $field);
-				$data{$key} = $value;
-			}
-		} else {
-			%data = %{ $parser->parse($line) };
-		}
-		defined $data{isrobot}   and ($data{isrobot}   =~ /\-/         or next);
-		defined $data{pagemaker} and ($data{pagemaker} =~ /$pagemaker/ or next);
-		defined $data{path}      and ($data{path}      =~ /$path/      or next);
-		defined $data{method}    and ($data{method}    =~ /$method/    or next);
-		if (defined $data{cache}) {
-			$data{cache} =~ /$cache/ or next;
-			($data{cache}) = $data{cache} =~ /^([\w\-]+)/;
-		} else {
-			$data{cache} = '';
-		}
+exit;
 
-		print STDERR $line;
-		my $microsec = $data{D} || $data{taken} or next;
-		my $millisec = $microsec / 1000;
+package Format::TSV;
+use strict;
+use warnings;
 
-		my $key = floor($millisec / 100 + 0.5) * 100;
-		$key = 10000 if $key > 10000;
-		$stat->{$key}++;
-		$stat->{$keys[$index]}-- if defined($keys[$index]);
+sub new {
+	my ($class) = @_;
+	bless {}, $class;
+}
 
-		$detail_stat->{$data{$group}} ||= {};
-		$detail_keys->{$data{$group}} ||= ();
-		$detail_stat->{$data{$group}}->{$key}++;
-
-		$keys[$index] = $key;
-		foreach (%$detail_keys){
-			$detail_stat->{$_}->{$detail_keys->{$_}[$index]}-- if defined($detail_keys->{$_}[$index]);
-			undef $detail_keys->{$_}[$index];
-		}
-		$detail_keys->{$data{$group}}[$index] = $key;
-		$index++;
-		$index = 0 if $index >= $max;
-
-		last if tv_interval($start) > 0.0416666666666667;
+sub parse {
+	my ($self, $line) = @_;
+	my %data;
+	foreach my $field (split(/\t/, $line)){
+		my ($key, $value) = split(/:/, $field);
+		$data{$key} = $value;
 	}
+	\%data;
+}
 
-	glClear(GL_COLOR_BUFFER_BIT);
-
-	glColor3d(1, 1, 1);
-	glBegin(GL_LINE_LOOP);
-	glVertex2d(1 / $w, 1 / $h);
-	glVertex2d(     1, 1 / $h);
-	glVertex2d(     1,      1);
-	glVertex2d(1 / $w,      1);
-	glEnd();
-
-	glColor3d(0.1, 0.1, 0.1);
-	glBegin(GL_LINES);
-	for (my $i = 0; $i < 10; $i++) {
-		glVertex2d($i * 0.1, 0);
-		glVertex2d($i * 0.1, 1);
-	}
-	for (my $i = 0; $i < 10; $i++) {
-		glVertex2d(0, $i * 0.1);
-		glVertex2d(1, $i * 0.1);
-	}
-	glEnd();
-
-	my $sec1   = 0;
-	my $total  = sum(values %$stat) || 0;
-	my $totals = {};
-	my $sec1s  = {};
-	if ($total) {
-		$sec1 = draw($total, $stat, [0.1, 0.9, 0.3], GL_LINE_STRIP);
-		draw($total, $stat, [0.1, 0.9, 0.3], GL_POINTS);
-	}
-
-	my $i = 0;
-	my $colors = {};
-	foreach (keys %$detail_stat) {
-		my $color = COLORS->[ $i % @{COLORS()}];
-		$colors->{$_} = $color;
-		$totals->{$_} = sum(values %{$detail_stat->{$_}}) || 0;
-		$sec1s->{$_} ||= 0;
-		if ($totals->{$_}) {
-			$sec1s->{$_} = draw($totals->{$_}, $detail_stat->{$_}, $color, GL_LINE_STRIP);
-			draw($totals->{$_}, $detail_stat->{$_}, $color, GL_POINTS);
-		}
-		$i++;
-	}
-
-	glColor3d(1, 1, 1);
-	glRasterPos2d(0.1, 0.01 + 1 / $h * 2);
-
-	glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord($_)) for split //, sprintf('Total:%d | %.1f%% in 1 second ', $total, $sec1 * 100);
-
-	{
-		my $i = 0;
-		foreach (keys %$totals){
-			glColor3d(@{ $colors->{$_} });
-			glRasterPos2d(0.9,  0.01 + (1 / $h * 15) * $i++);
-			glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, ord($_)) for split //, sprintf('%s:%s ', $_, $totals->{$_});
-			glFlush();
-		}
-	}
-
-	glutSwapBuffers();
-
-};
-
-
-glutInit();
-glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH | GLUT_ALPHA);
-glutInitWindowSize($w, $h);
-glutCreateWindow( 'realtimeresponsegraph' );
-# glEnable(GL_COLOR_MATERIAL);
-glutReshapeFunc(sub {
-		my ($aw, $ah) = @_;
-
-		glViewport(0, 0, $aw, $ah);
-		glLoadIdentity();
-		glOrtho(
-			-$aw / $w + 1, $aw / $w,
-			-$ah / $h + 1, $ah / $h,
-			-1.0, 1.0
-		);
-		# glTranslated(-1, -1, 0);
-	});
-glutDisplayFunc($main);
-glutIdleFunc($main);
-glutMainLoop();
-
-package LogFormat;
+package Format::Apache::LogFormat;
 use strict;
 use warnings;
 use base qw(Class::Data::Inheritable);
+use Carp;
 
 my $regexp;
 
@@ -234,7 +288,7 @@ INIT {
 
 	__PACKAGE__->mk_classdata(logformats => {});
 
-	LogFormat->define_logformats(q[
+	__PACKAGE__->define_logformats(q[
 		LogFormat "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"" combined
 		LogFormat "%h %l %u %t \"%r\" %>s %b" common
 	]);
@@ -263,6 +317,7 @@ sub define_logformats {
 sub new {
 	my ($class, $name) = @_;
 	my $format = $class->logformats->{$name};
+	$format or croak "undefined format: $format";
 	bless {
 		name   => $name,
 		regexp => $format->{regexp},
