@@ -252,8 +252,8 @@ sub run_loop {
 			glViewport(0, 0, $aw, $ah);
 			glLoadIdentity();
 			glOrtho(
-				-$aw / $w + 1, $aw / $w,
-				-$ah / $h + 1, $ah / $h,
+				0, 1,
+				0, 1,
 				-1.0, 1.0
 			);
 			# glTranslated(-1, -1, 0);
