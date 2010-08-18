@@ -15,21 +15,21 @@ my $method    = 'GET|POST';
 my $format    = '';
 my $pagemaker = '.';
 my $cache     = '.';
-my $max       = 100;
+my $max       = 1000;
 
 if (-e "$ENV{HOME}/.rrgrc") {
 	do "$ENV{HOME}/.rrgrc";
 }
 
 GetOptions(
-	"width=i"  => \$w,
-	"height=i" => \$h,
-	"path=s"   => \$path,
-	"method=s"   => \$method,
-	"format=s"   => \$format,
-	"pagemaker=s"   => \$pagemaker,
-	"max=s"   => \$max,
-	"cache=s"   => \$cache,
+	"width=i"     => \$w,
+	"height=i"    => \$h,
+	"path=s"      => \$path,
+	"method=s"    => \$method,
+	"format=s"    => \$format,
+	"pagemaker=s" => \$pagemaker,
+	"max=i"       => \$max,
+	"cache=s"     => \$cache,
 );
 
 $format or die;
