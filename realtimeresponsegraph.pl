@@ -8,6 +8,7 @@ use POSIX qw(floor);
 use Time::HiRes qw(gettimeofday tv_interval);
 use Getopt::Long;
 use Pod::Usage;
+use constant FPS => 24;
 use constant COLORS => [ map { [ map { $_ ? hex($_) / 0xff : () } split /(..)/ ] } qw/
 	00dd1a
 	5c0800
@@ -93,10 +94,12 @@ sub read_input {
 	my $detail_keys  = $self->{detail_keys};
 	my $keys         = $self->{keys};
 
+	my $max_wait     = 1 / FPS;
+
 	my $start = [ gettimeofday ];
 	my $rin = '';
 	vec($rin, fileno(STDIN),  1) = 1;
-	LINE: while (select($rin, undef, undef, 0)) {
+	LINE: while (select($rin, undef, undef, $max_wait)) {
 		my $line = <>;
 		defined $line or next;
 		my $data = $self->{parser}->parse($line);
@@ -106,7 +109,7 @@ sub read_input {
 		}
 
 		($data->{cache}) = ($data->{cache} =~ /^([\w\-]+)/) if defined $data->{cache};
-		print STDERR $line;
+		# print STDERR $line;
 
 		my $microsec = $data->{D} || $data->{taken} or next;
 		my $millisec = $microsec / 1000;
@@ -134,7 +137,7 @@ sub read_input {
 		$index = 0 if $index >= $self->{opts}->{max};
 		$self->{index} = $index;
 
-		last if tv_interval($start) > 0.0416666666666667;
+		last if tv_interval($start) > $max_wait;
 	}
 }
 
@@ -145,74 +148,97 @@ sub run_loop {
 	                                                       Format::Apache::LogFormat->new($self->{opts}->{format});
 
 	my ($w, $h) = ($self->{opts}->{width}, $self->{opts}->{height});
+	my $frame = 0;
+	my $fps   = FPS;
+	my $start = [ gettimeofday ];
 	my $main = sub {
 		$self->read_input;
 
 		glClear(GL_COLOR_BUFFER_BIT);
 
-		glColor3d(1, 1, 1);
-		glBegin(GL_LINE_LOOP);
-		glVertex2d(1 / $w, 1 / $h);
-		glVertex2d(     1, 1 / $h);
-		glVertex2d(     1,      1);
-		glVertex2d(1 / $w,      1);
-		glEnd();
+		{; # draw border
+			glColor3d(1, 1, 1);
+			glBegin(GL_LINE_LOOP);
+			glVertex2d(1 / $w, 1 / $h);
+			glVertex2d(     1, 1 / $h);
+			glVertex2d(     1,      1);
+			glVertex2d(1 / $w,      1);
+			glEnd();
+		}
 
-		glColor3d(0.1, 0.1, 0.1);
-		glBegin(GL_LINES);
-		for (my $i = 0; $i < 10; $i++) {
-			glVertex2d($i * 0.1, 0);
-			glVertex2d($i * 0.1, 1);
+		{; # draw ruled lines
+			glColor3d(0.1, 0.1, 0.1);
+			glBegin(GL_LINES);
+			for (my $i = 0; $i < 10; $i++) {
+				glVertex2d($i * 0.1, 0);
+				glVertex2d($i * 0.1, 1);
+			}
+			for (my $i = 0; $i < 10; $i++) {
+				glVertex2d(0, $i * 0.1);
+				glVertex2d(1, $i * 0.1);
+			}
+			glEnd();
 		}
-		for (my $i = 0; $i < 10; $i++) {
-			glVertex2d(0, $i * 0.1);
-			glVertex2d(1, $i * 0.1);
-		}
-		glEnd();
 
 		my $stats = $self->{stats};
 		my $detail_stats = $self->{detail_stats};
 
-		my $sec1   = 0;
 		my $total  = sum(values %$stats) || 0;
-		my $totals = {};
+		my $sec1   = 0;
 		my $sec1s  = {};
-		if ($total) {
-			$sec1 = draw($total, $stats, [0.5, 0.5, 0.5], GL_LINE_STRIP);
-			draw($total, $stats, [0.5, 0.5, 0.5], GL_POINTS);
-		}
-
-		my $i = 0;
+		my $totals = {};
 		my $colors = {};
-		foreach (keys %$detail_stats) {
-			my $color = COLORS->[ $i % @{COLORS()}];
-			$colors->{$_} = $color;
-			$totals->{$_} = sum(values %{$detail_stats->{$_}}) || 0;
-			$sec1s->{$_} ||= 0;
-			if ($totals->{$_}) {
-				$sec1s->{$_} = draw($totals->{$_}, $detail_stats->{$_}, $color, GL_LINE_STRIP);
-				draw($totals->{$_}, $detail_stats->{$_}, $color, GL_POINTS);
+
+		{; # draw graphs
+			if ($total) {
+				$sec1 = draw($total, $stats, [0.5, 0.5, 0.5], GL_LINE_STRIP);
+				draw($total, $stats, [0.5, 0.5, 0.5], GL_POINTS);
 			}
-			$i++;
+
+			my $i = 0;
+			foreach (keys %$detail_stats) {
+				my $color = COLORS->[ $i % @{COLORS()}];
+				$colors->{$_} = $color;
+				$totals->{$_} = sum(values %{$detail_stats->{$_}}) || 0;
+				$sec1s->{$_} ||= 0;
+				if ($totals->{$_}) {
+					$sec1s->{$_} = draw($totals->{$_}, $detail_stats->{$_}, $color, GL_LINE_STRIP);
+					draw($totals->{$_}, $detail_stats->{$_}, $color, GL_POINTS);
+				}
+				$i++;
+			}
 		}
 
-		glColor3d(1, 1, 1);
-		glRasterPos2d(0.1, 0.01 + 1 / $h * 2);
+		{; # statics
+			glColor3d(1, 1, 1);
+			glRasterPos2d(0.1, 0.01 + 1 / $h * 2);
+			glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord($_)) for split //, sprintf('Total:%d | %.1f%%@1sec', $total, $sec1 * 100);
+		}
 
-		glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord($_)) for split //, sprintf('Total:%d | %.1f%% in 1 second ', $total, $sec1 * 100);
-
-		{
+		{; # legend
 			my $i = 0;
 			foreach (keys %$totals){
 				glColor3d(@{ $colors->{$_} });
-				glRasterPos2d(0.9,  0.01 + (1 / $h * 15) * $i++);
-				glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, ord($_)) for split //, sprintf('%s:%s ', $_, $totals->{$_});
-				glFlush();
+				glRasterPos2d(0.7,  0.01 + (1 / $h * 15) * $i++);
+				glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, ord($_)) for split //, sprintf('%.1f%% | %s:%s', $sec1s->{$_} * 100, $_, $totals->{$_});
 			}
 		}
 
-		glutSwapBuffers();
+		{; # fps
+			$frame++;
+			my $time     = [ gettimeofday ];
+			my $interval = tv_interval($start, $time);
+			if ($interval > 1) {
+				$fps   = $frame / $interval;
+				$frame = 0;
+				$start = $time;
+			}
+			glColor3d(0.3, 0.3, 0.3);
+			glRasterPos2d(0.05,  0.01);
+			glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, ord($_)) for split //, sprintf('%dfps', $fps);
+		}
 
+		glutSwapBuffers();
 	};
 
 
