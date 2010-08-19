@@ -38,8 +38,7 @@ sub new {
 			method    => undef,
 			format    => '',
 			max       => 1000,
-			group     => 'method',
-			isrobot   => '-',
+			dot       => undef,
 		},
 		%opts
 	}, $class;
@@ -54,8 +53,8 @@ sub parse_options {
 		"path=s"         => \$self->{opts}->{path},
 		"method=s"       => \$self->{opts}->{method},
 		"format=s"       => \$self->{opts}->{format},
-		"group=s"        => \$self->{opts}->{group},
 		"invert-match|v" => \$self->{opts}->{invert_match},
+		"dot"            => \$self->{opts}->{dot},
 
 		"pagemaker=s"    => \$self->{opts}->{pagemaker},
 		"cache=s"        => \$self->{opts}->{cache},
@@ -111,13 +110,38 @@ sub read_input {
 			id    => $id,
 			x     => $self->{index} += 7,
 			color => [rand(), rand(), rand()],
-			ua    => $data->{'{User-Agent}i'},
+			ua    => '[' . $self->transform_ua($data->{'{User-Agent}i'}) . ']',
 			first => $epoch,
 			method => $data->{method},
 		};
 		$self->{last_time} = $epoch if !$self->{last_time} || $self->{last_time} < $epoch;
 
 		last if tv_interval($start) > $max_wait;
+	}
+}
+
+sub transform_ua {
+	my ($self, $ua) = @_;
+	if ($ua =~ /DSi/) {
+		return 'DSi';
+	} elsif ($ua =~ /Opera/) {
+		return 'Opera';
+	} elsif ($ua =~ /MSIE/) {
+		return 'MSIE';
+	} elsif ($ua =~ /Firefox/) {
+		return 'Firefox';
+	} elsif ($ua =~ /Chrome/) {
+		return 'Chrome';
+	} elsif ($ua =~ /Safari/) {
+		return 'Safari';
+	} elsif ($ua =~ /WebKit/) {
+		return 'WebKit';
+	} elsif ($ua =~ /BOT|Crawler|Spider/i) {
+		return 'BOT';
+	} elsif ($ua =~ /KDDI|NetFront|DoCoMo/i) {
+		return 'KTai';
+	} else {
+		return $ua;
 	}
 }
 
@@ -147,26 +171,36 @@ sub run_loop {
 		}
 
 		{;
+			glPointSize(4);
+			my $t = {};
+
 			my $now = $self->{last_time} || time();
 			for (my $y = 0; $y < $h; $y++) { # 縦が秒
 				my $ids = $self->{keys}->{$now - $y} or next;
 				for my $id (@$ids) {
 					my $d = $self->{ids}->{$id};
 					glColor3d(@{ $d->{color} });
-#					glPointSize(3);
-#					glBegin(GL_POINTS);
-#					glVertex2d(
-#						1 / $w * (($d->{x} % 300) * 5),
-#						1 / $h * ($y * 5),
-#					);
-#					glEnd();
-					glRasterPos2d(
-						1 / $w * (($d->{x} % ($w / 5)) * 5),
-						1 / $h * ($y * 5),
-					);
-					glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord($_)) for split //, $d->{method};
-					if ($d->{first} == $now - $y) {
-						glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord($_)) for split //, $d->{ua};
+					my $xx = 1 / $w * (($d->{x} % 200) * 5);
+					my $yy = 1 / $h * ($y * 5);
+					if (my $prev = $t->{$id}) {
+						glBegin(GL_LINE_STRIP);
+						glVertex2d($prev->{xx}, $prev->{yy});
+						glVertex2d($xx, $yy);
+						glEnd();
+					}
+					$t->{$id} = +{ xx => $xx, yy => $yy };
+
+					glBegin(GL_POINTS);
+					glVertex2d($xx, $yy);
+					glEnd();
+
+					unless ($self->{opts}->{dot}) {
+						my $short_id = substr($id, -4, 4);
+						glRasterPos2d($xx, $yy);
+						glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord($_)) for split //, " " . ($d->{method} eq 'GET' ? $short_id : $d->{method} . "=" . $short_id);
+						if ($d->{first} == $now - $y) {
+							glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord($_)) for split //, " " . $d->{ua};
+						}
 					}
 				}
 			}
