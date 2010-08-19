@@ -10,17 +10,6 @@ use Getopt::Long;
 use Pod::Usage;
 use DateTime::Format::HTTP;
 use constant FPS => 24;
-use constant COLORS => [ map { [ map { $_ ? hex($_) / 0xff : () } split /(..)/ ] } qw/
-	00dd1a
-	5c0800
-	a6a404
-	6da604
-	1a6801
-	01684e
-	203d9d
-	48209d
-	9d2096
-/];
 
 sub run {
 	my ($class) = @_;
@@ -43,8 +32,8 @@ sub new {
 		keys         => {},
 		index        => 1,
 		opts => {
-			width     => 700,
-			height    => 500,
+			width     => 1150,
+			height    => 800,
 			path      => undef,
 			method    => undef,
 			format    => '',
@@ -100,6 +89,7 @@ sub read_input {
 	my $rin = '';
 	vec($rin, fileno(STDIN),  1) = 1;
 	LINE: while (select($rin, undef, undef, $max_wait)) {
+		sleep 0.001;
 		my $line = <>;
 		defined $line or next;
 		my $data = $self->{parser}->parse($line);
@@ -119,12 +109,14 @@ sub read_input {
 		push @{ $self->{keys}->{$epoch} ||= [] }, $id;
 		$self->{ids}->{$id} ||= {
 			id    => $id,
-			x     => $self->{index}++,
+			x     => $self->{index} += 7,
 			color => [rand(), rand(), rand()],
+			ua    => $data->{'{User-Agent}i'},
+			first => $epoch,
+			method => $data->{method},
 		};
 		$self->{last_time} = $epoch if !$self->{last_time} || $self->{last_time} < $epoch;
 
-		# sleep 0.01;
 		last if tv_interval($start) > $max_wait;
 	}
 }
@@ -161,13 +153,21 @@ sub run_loop {
 				for my $id (@$ids) {
 					my $d = $self->{ids}->{$id};
 					glColor3d(@{ $d->{color} });
-					glPointSize(3);
-					glBegin(GL_POINTS);
-					glVertex2d(
-						1 / $w * (($d->{x} % 300) * 5),
+#					glPointSize(3);
+#					glBegin(GL_POINTS);
+#					glVertex2d(
+#						1 / $w * (($d->{x} % 300) * 5),
+#						1 / $h * ($y * 5),
+#					);
+#					glEnd();
+					glRasterPos2d(
+						1 / $w * (($d->{x} % ($w / 5)) * 5),
 						1 / $h * ($y * 5),
 					);
-					glEnd();
+					glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord($_)) for split //, $d->{method};
+					if ($d->{first} == $now - $y) {
+						glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord($_)) for split //, $d->{ua};
+					}
 				}
 			}
 		}
