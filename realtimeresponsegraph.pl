@@ -60,16 +60,17 @@ sub new {
 sub parse_options {
 	my ($self) = @_;
 	GetOptions(
-		"width=i"     => \$self->{opts}->{width},
-		"height=i"    => \$self->{opts}->{height},
-		"max=i"       => \$self->{opts}->{max},
-		"path=s"      => \$self->{opts}->{path},
-		"method=s"    => \$self->{opts}->{method},
-		"format=s"    => \$self->{opts}->{format},
-		"group=s"     => \$self->{opts}->{group},
+		"width=i"        => \$self->{opts}->{width},
+		"height=i"       => \$self->{opts}->{height},
+		"max=i"          => \$self->{opts}->{max},
+		"path=s"         => \$self->{opts}->{path},
+		"method=s"       => \$self->{opts}->{method},
+		"format=s"       => \$self->{opts}->{format},
+		"group=s"        => \$self->{opts}->{group},
+		"invert-match|v" => \$self->{opts}->{invert_match},
 
-		"pagemaker=s" => \$self->{opts}->{pagemaker},
-		"cache=s"     => \$self->{opts}->{cache},
+		"pagemaker=s"    => \$self->{opts}->{pagemaker},
+		"cache=s"        => \$self->{opts}->{cache},
 	);
 	if ($self->{opts}->{group} =~ /^sub\s*\{/) {
 		$self->{opts}->{group} = eval($self->{opts}->{group});
@@ -105,11 +106,15 @@ sub read_input {
 		my $data = $self->{parser}->parse($line);
 		for (qw/path method pagemaker cache isrobot/) {
 			my $reg = $self->{opts}->{$_};
-			defined $reg && defined $data->{$_} and ($data->{$_} =~ /$reg/ or next LINE);
+			if ($self->{opts}->{invert_match}) {
+				defined $reg && defined $data->{$_} and ($data->{$_} !~ /$reg/ or next LINE);
+			} else {
+				defined $reg && defined $data->{$_} and ($data->{$_} =~ /$reg/ or next LINE);
+			}
 		}
 
 		($data->{cache}) = ($data->{cache} =~ /^([\w\-]+)/) if defined $data->{cache};
-		# print STDERR $line;
+		print STDERR $line;
 
 		my $microsec = $data->{D} || $data->{taken} or next;
 		my $millisec = $microsec / 1000;
@@ -387,12 +392,16 @@ realtimeresponsegraph.pl
  ssh proxy01 'tail -f /var/log/httpd/access_log' | realtimeresponsegraph.pl --format rich_log --path '^/$'
 
  Options:
-    --format      required.
-    --width       window width (default: 700)
-    --height      window height (default: 500)
-    --max         number of max requests
-    --path        gather only path matching this regexp
-    --method
+    --format [name]       required.
+    --width  [num]        window width (default: 700)
+    --height [num]        window height (default: 500)
+    --max    [n]          number of max requests
+    --path   [regexp]     gather only path matching this regexp
+    --method [regexp]     gather only method matching this regexp
+    --group  [name|sub]   draw all graphs group by this.
+                          --group 'sub{$_->{method}}' is same as --group method
+    -v --invert-match     invert all condition
+
     --pagemaker
     --cache
 
