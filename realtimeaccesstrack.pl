@@ -203,7 +203,7 @@ sub run_loop {
 					my $d = $self->{ids}->{$id};
 					if ($d->{count} < $self->{threshold}) {
 						next;
-					} elsif ($d->{count} > $self->{threshold}) {
+					} elsif ($d->{count} > $self->{threshold} + 5) {
 						$decr++;
 					}
 
