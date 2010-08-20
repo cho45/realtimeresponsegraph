@@ -3,7 +3,7 @@ package RealtimeResponseGraph;
 use strict;
 use warnings;
 use OpenGL qw(:all);
-use List::Util qw(sum);
+use List::Util qw(sum first);
 use POSIX qw(floor);
 use Time::HiRes qw(gettimeofday tv_interval sleep);
 use Getopt::Long;
@@ -40,7 +40,8 @@ sub new {
 			format    => '',
 			max       => 1000,
 			dot       => undef,
-			threshold => 0,
+			threshold => 5,
+			most      => undef,
 		},
 		%opts
 	}, $class;
@@ -58,6 +59,7 @@ sub parse_options {
 		"invert-match|v" => \$self->{opts}->{invert_match},
 		"dot"            => \$self->{opts}->{dot},
 		"threshold|t=i"  => \$self->{opts}->{threshold},
+		"most"           => \$self->{opts}->{most},
 
 		"pagemaker=s"    => \$self->{opts}->{pagemaker},
 		"cache=s"        => \$self->{opts}->{cache},
@@ -105,8 +107,17 @@ sub read_input {
 		}
 		$id or next;
 
+		my @paths      = split '/', $data->{path};
+		my ($last)     = (pop(@paths) =~ /(.{0,10})$/);
+		my $short_path = join('/', map { /^([a-z0-9]{0,3})/i } @paths) . "/$last";
+
 		my $epoch = DateTime::Format::HTTP->parse_datetime($data->{t})->epoch;
-		push @{ $self->{keys}->{$epoch} ||= [] }, $id;
+		push @{ $self->{keys}->{$epoch} ||= [] }, +{
+			id         => $id,
+			method     => $data->{method},
+			path       => $data->{path},
+			short_path => $short_path,
+		};
 		$self->{ids}->{$id} ||= {
 			id     => $id,
 			x      => $self->{index} += 7,
@@ -114,7 +125,6 @@ sub read_input {
 			ua     => '[' . $self->transform_ua($data->{'{User-Agent}i'}) . ']',
 			first  => $epoch,
 			count  => 0,
-			method => $data->{method},
 		};
 		$self->{ids}->{$id}->{count}++;
 		$self->{last_time} = $epoch if !$self->{last_time} || $self->{last_time} < $epoch;
@@ -153,8 +163,9 @@ sub gc {
 	my $now = $self->{last_time} or return;
 	for my $key (keys %{ $self->{keys} }) {
 		if ($key < ($now - $self->{opts}->{height} / 3)) {
-			my $ids = delete $self->{keys}->{$key};
-			for my $id (@$ids) {
+			my $reqs = delete $self->{keys}->{$key};
+			for my $req (@$reqs) {
+				my $id = $req->{id};
 				$self->{ids}->{$id}->{count}--;
 				# warn "decr: $id / " . $self->{ids}->{$id}->{count};
 				if ($self->{ids}->{$id}->{count} <= 0) {
@@ -195,15 +206,17 @@ sub run_loop {
 			glPointSize(4);
 			my $t = {};
 			my $decr = 0;
+			my $counter = {};
 
 			my $now = $self->{last_time} || time();
 			for (my $y = 0; $y < $h; $y++) { # 縦が秒
-				my $ids = $self->{keys}->{$now - $y} or next;
-				for my $id (@$ids) {
+				my $reqs = $self->{keys}->{$now - $y} or next;
+				for my $req (@$reqs) {
+					my $id = $req->{id};
 					my $d = $self->{ids}->{$id};
 					if ($d->{count} < $self->{threshold}) {
 						next;
-					} elsif ($d->{count} > $self->{threshold} + 5) {
+					} elsif ($d->{count} > $self->{threshold}) {
 						$decr++;
 					}
 
@@ -215,6 +228,8 @@ sub run_loop {
 						glVertex2d($prev->{xx}, $prev->{yy});
 						glVertex2d($xx, $yy);
 						glEnd();
+					} else {
+						$counter->{ $d->{count} }++;
 					}
 					$t->{$id} = +{ xx => $xx, yy => $yy };
 
@@ -223,20 +238,30 @@ sub run_loop {
 					glEnd();
 
 					unless ($self->{opts}->{dot}) {
+						my $desc     = $req->{short_path};
 						my $short_id = substr($id, -4, 4);
 						glRasterPos2d($xx, $yy);
-						glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord($_)) for split //, " " . ($d->{method} eq 'GET' ? $short_id : $d->{method} . "=" . $short_id);
+						glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord($_)) for split //, " " . ($req->{method} eq 'GET' ? $desc : $req->{method} . "=" . $desc);
 						if ($d->{first} == $now - $y) {
-							glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord($_)) for split //, " " . $d->{ua};
+							glutBitmapCharacter(GLUT_BITMAP_HELVETICA_10, ord($_)) for split //, sprintf(" [%s]%s", $short_id, $d->{ua});
 						}
 					}
 				}
 			}
 
-			if ($decr) {
-				$self->{threshold}++;
+			if ($self->{opts}->{most}) {
+				if ($decr) {
+					$self->{threshold}++;
+				} else {
+					$self->{threshold}--;
+				}
 			} else {
-				$self->{threshold}--;
+				my $next_threshold = do { my $i = 0; first { $i += $counter->{$_} ; $i >= $self->{opts}->{threshold}; } sort { $b <=> $a } keys %$counter };
+				if ($next_threshold) {
+					$self->{threshold} = $next_threshold;
+				} else {
+					$self->{threshold}--;
+				}
 			}
 		}
 
