@@ -31,6 +31,7 @@ sub new {
 		ids          => {},
 		keys         => {},
 		index        => 1,
+		threshold    => 0,
 		opts => {
 			width     => 1150,
 			height    => 800,
@@ -39,6 +40,7 @@ sub new {
 			format    => '',
 			max       => 1000,
 			dot       => undef,
+			threshold => 0,
 		},
 		%opts
 	}, $class;
@@ -55,14 +57,11 @@ sub parse_options {
 		"format=s"       => \$self->{opts}->{format},
 		"invert-match|v" => \$self->{opts}->{invert_match},
 		"dot"            => \$self->{opts}->{dot},
+		"threshold|t=i"  => \$self->{opts}->{threshold},
 
 		"pagemaker=s"    => \$self->{opts}->{pagemaker},
 		"cache=s"        => \$self->{opts}->{cache},
 	);
-	if ($self->{opts}->{group} =~ /^sub\s*\{/) {
-		$self->{opts}->{group} = eval($self->{opts}->{group});
-		die $@ if ($@);
-	}
 	$self;
 }
 
@@ -77,11 +76,6 @@ sub load_rc {
 
 sub read_input {
 	my ($self) = @_;
-	my $stats        = $self->{stats};
-	my $detail_stats = $self->{detail_stats};
-	my $detail_keys  = $self->{detail_keys};
-	my $keys         = $self->{keys};
-
 	my $max_wait     = 1 / FPS;
 
 	my $start = [ gettimeofday ];
@@ -100,20 +94,29 @@ sub read_input {
 				defined $reg && defined $data->{$_} and ($data->{$_} =~ /$reg/ or next LINE);
 			}
 		}
-
-		my $id = $data->{'{bcookie}e'} or next;
-		$id eq '-' and next;
+		
+		my $id;
+		for my $n (qw/{bcookie}e {X-DSi-SID}i {X-DCMGUID}i {X-UP-SUBNO}i {X-JPHONE-UID}i/) {
+		#for my $n (qw/{bcookie}e/) {
+			$id = $data->{$n} or next;
+			$id = undef if $id eq '-';
+			$id or next;
+			last;
+		}
+		$id or next;
 
 		my $epoch = DateTime::Format::HTTP->parse_datetime($data->{t})->epoch;
 		push @{ $self->{keys}->{$epoch} ||= [] }, $id;
 		$self->{ids}->{$id} ||= {
-			id    => $id,
-			x     => $self->{index} += 7,
-			color => [rand(), rand(), rand()],
-			ua    => '[' . $self->transform_ua($data->{'{User-Agent}i'}) . ']',
-			first => $epoch,
+			id     => $id,
+			x      => $self->{index} += 7,
+			color  => [rand(), rand(), rand()],
+			ua     => '[' . $self->transform_ua($data->{'{User-Agent}i'}) . ']',
+			first  => $epoch,
+			count  => 0,
 			method => $data->{method},
 		};
+		$self->{ids}->{$id}->{count}++;
 		$self->{last_time} = $epoch if !$self->{last_time} || $self->{last_time} < $epoch;
 
 		last if tv_interval($start) > $max_wait;
@@ -145,6 +148,24 @@ sub transform_ua {
 	}
 }
 
+sub gc {
+	my ($self) = @_;
+	my $now = $self->{last_time} or return;
+	for my $key (keys %{ $self->{keys} }) {
+		if ($key < ($now - $self->{opts}->{height} / 3)) {
+			my $ids = delete $self->{keys}->{$key};
+			for my $id (@$ids) {
+				$self->{ids}->{$id}->{count}--;
+				# warn "decr: $id / " . $self->{ids}->{$id}->{count};
+				if ($self->{ids}->{$id}->{count} <= 0) {
+					# warn "GC: ". $self->{ids}->{$id};;
+					delete $self->{ids}->{$id};
+				}
+			}
+		}
+	}
+}
+
 sub run_loop {
 	my ($self) = @_;
 	$self->{opts}->{format} or $self->help;
@@ -173,12 +194,19 @@ sub run_loop {
 		{;
 			glPointSize(4);
 			my $t = {};
+			my $decr = 0;
 
 			my $now = $self->{last_time} || time();
 			for (my $y = 0; $y < $h; $y++) { # 縦が秒
 				my $ids = $self->{keys}->{$now - $y} or next;
 				for my $id (@$ids) {
 					my $d = $self->{ids}->{$id};
+					if ($d->{count} < $self->{threshold}) {
+						next;
+					} elsif ($d->{count} > $self->{threshold}) {
+						$decr++;
+					}
+
 					glColor3d(@{ $d->{color} });
 					my $xx = 1 / $w * (($d->{x} % 200) * 5);
 					my $yy = 1 / $h * ($y * 5);
@@ -204,6 +232,12 @@ sub run_loop {
 					}
 				}
 			}
+
+			if ($decr) {
+				$self->{threshold}++;
+			} else {
+				$self->{threshold}--;
+			}
 		}
 
 		{; # fps
@@ -221,6 +255,8 @@ sub run_loop {
 		}
 
 		glutSwapBuffers();
+
+		$self->gc;
 	};
 
 
